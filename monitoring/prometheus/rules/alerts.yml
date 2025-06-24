@@ -1,0 +1,244 @@
+# Prometheus Alerting Rules for AI Options Trading System
+# Defines alerts for system health, performance, and business metrics
+
+groups:
+  # System Health Alerts
+  - name: system_health
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} on {{ $labels.instance }} has been down for more than 1 minute."
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 90% on {{ $labels.instance }} for more than 5 minutes."
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% on {{ $labels.instance }} for more than 5 minutes."
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 10% on {{ $labels.instance }} for more than 5 minutes."
+
+  # Database Alerts
+  - name: database_health
+    rules:
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database is down for more than 1 minute."
+
+      - alert: PostgreSQLTooManyConnections
+        expr: pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL has too many connections"
+          description: "PostgreSQL is using more than 80% of available connections."
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is down for more than 1 minute."
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis is using more than 90% of allocated memory."
+
+  # Application Performance Alerts
+  - name: application_performance
+    rules:
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time for {{ $labels.job }}"
+          description: "95th percentile response time is above 1 second for {{ $labels.job }}."
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate for {{ $labels.job }}"
+          description: "Error rate is above 5% for {{ $labels.job }} for more than 5 minutes."
+
+      - alert: APIGatewayRateLimitHit
+        expr: rate(api_gateway_rate_limit_hits_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API Gateway rate limit frequently hit"
+          description: "API Gateway rate limit is being hit more than 10 times per second."
+
+  # Data Pipeline Alerts
+  - name: data_pipeline
+    rules:
+      - alert: DataIngestionStopped
+        expr: increase(data_ingestion_records_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data ingestion has stopped"
+          description: "No new records have been ingested for more than 10 minutes."
+
+      - alert: HighDataIngestionErrors
+        expr: rate(data_ingestion_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High data ingestion error rate"
+          description: "Data ingestion error rate is above 1 error per second."
+
+      - alert: CacheHitRateLow
+        expr: rate(cache_hits_total[5m]) / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m])) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is below 80% for more than 10 minutes."
+
+  # Business Logic Alerts
+  - name: business_logic
+    rules:
+      - alert: NoMarketDataUpdates
+        expr: time() - market_data_last_update_timestamp > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Market data updates have stopped"
+          description: "No market data updates received for more than 5 minutes."
+
+      - alert: AnalyticsCalculationFailed
+        expr: increase(analytics_calculation_failures_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Analytics calculations failing"
+          description: "More than 5 analytics calculations have failed in the last 5 minutes."
+
+      - alert: SignalGenerationStopped
+        expr: increase(signals_generated_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Signal generation has stopped"
+          description: "No trading signals have been generated for more than 15 minutes."
+
+  # Security Alerts
+  - name: security
+    rules:
+      - alert: UnauthorizedAccess
+        expr: rate(http_requests_total{status="401"}[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of unauthorized access attempts"
+          description: "More than 5 unauthorized access attempts per second detected."
+
+      - alert: SuspiciousActivity
+        expr: rate(http_requests_total{status="403"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High rate of forbidden requests"
+          description: "More than 10 forbidden requests per second detected - possible attack."
+
+  # Infrastructure Alerts
+  - name: infrastructure
+    rules:
+      - alert: ContainerRestarting
+        expr: increase(container_restart_count[1h]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} restarting frequently"
+          description: "Container {{ $labels.name }} has restarted more than 3 times in the last hour."
+
+      - alert: LoadBalancerUnhealthy
+        expr: aws_elb_healthy_host_count / aws_elb_host_count < 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Load balancer has unhealthy targets"
+          description: "Less than 50% of load balancer targets are healthy."
+
+  # Custom Trading System Alerts
+  - name: trading_system
+    rules:
+      - alert: VolatilitySpike
+        expr: increase(market_volatility_events_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Market volatility spike detected"
+          description: "More than 10 volatility events detected in the last 5 minutes."
+
+      - alert: OptionsVolumeAnomaly
+        expr: options_volume_current / options_volume_average_1h > 3
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Options volume anomaly detected"
+          description: "Current options volume is 3x higher than the 1-hour average."
+
+      - alert: PriceGapDetected
+        expr: abs(stock_price_current - stock_price_previous) / stock_price_previous > 0.05
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Significant price gap detected for {{ $labels.symbol }}"
+          description: "Price gap of more than 5% detected for {{ $labels.symbol }}."
+

@@ -1,0 +1,140 @@
+# Prometheus Configuration for AI Options Trading System
+# Monitors all microservices and infrastructure components
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'ai-ots'
+    environment: 'development'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+  - "rules/*.yml"
+
+# Scrape configuration
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  # API Gateway
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+
+  # Cache Service
+  - job_name: 'cache-service'
+    static_configs:
+      - targets: ['cache-service:8001']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Data Ingestion Service
+  - job_name: 'data-ingestion'
+    static_configs:
+      - targets: ['data-ingestion:8002']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Analytics Service
+  - job_name: 'analytics'
+    static_configs:
+      - targets: ['analytics:8003']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Signal Generation Service
+  - job_name: 'signals'
+    static_configs:
+      - targets: ['signals:8004']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Portfolio Service
+  - job_name: 'portfolio'
+    static_configs:
+      - targets: ['portfolio:8005']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Redis Exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+
+  # PostgreSQL Exporter
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 15s
+
+  # Node Exporter (System metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # Docker metrics
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+
+  # Health checks for all services
+  - job_name: 'health-checks'
+    metrics_path: /health
+    static_configs:
+      - targets: 
+        - 'api-gateway:8000'
+        - 'cache-service:8001'
+        - 'data-ingestion:8002'
+        - 'analytics:8003'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Custom application metrics
+  - job_name: 'trading-metrics'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: /api/v1/metrics
+    scrape_interval: 30s
+    params:
+      format: ['prometheus']
+
+# Remote write configuration (for production)
+# remote_write:
+#   - url: "https://prometheus-remote-write-endpoint"
+#     basic_auth:
+#       username: "username"
+#       password: "password"
+
+# Storage configuration
+storage:
+  tsdb:
+    retention.time: 15d
+    retention.size: 10GB
+    wal-compression: true
+

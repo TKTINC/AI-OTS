@@ -1,0 +1,534 @@
+# AI Options Trading System - Complete Docker Compose
+# Orchestrates all microservices, databases, and supporting infrastructure
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # DATABASES
+  # =============================================================================
+  
+  # TimescaleDB (PostgreSQL with time-series extensions)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: ai-ots-timescaledb
+    environment:
+      POSTGRES_DB: ${DB_NAME:-trading_db}
+      POSTGRES_USER: ${DB_USER:-trading_admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trading_password_123}
+      TIMESCALEDB_TELEMETRY: 'off'
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./database/schema:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-trading_admin} -d ${DB_NAME:-trading_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ai-ots-redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./services/cache/redis.conf:/usr/local/etc/redis/redis.conf
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # =============================================================================
+  # CORE SERVICES
+  # =============================================================================
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: ai-ots-api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      # Service Configuration
+      - GATEWAY_HOST=0.0.0.0
+      - GATEWAY_PORT=8000
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # JWT Configuration
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      
+      # Service URLs
+      - CACHE_SERVICE_URL=http://cache-service:8001
+      - DATA_SERVICE_URL=http://data-ingestion:8002
+      - ANALYTICS_SERVICE_URL=http://analytics:8003
+      - SIGNALS_SERVICE_URL=http://signals:8004
+      - PORTFOLIO_SERVICE_URL=http://portfolio:8005
+      
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS=1000
+      - RATE_LIMIT_WINDOW=3600
+    
+    volumes:
+      - ./logs/gateway:/var/log/ai-ots
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Cache Service
+  cache-service:
+    build:
+      context: ./services/cache
+      dockerfile: Dockerfile
+    container_name: ai-ots-cache-service
+    ports:
+      - "8001:8001"
+    environment:
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      
+      # Service Configuration
+      - CACHE_SERVICE_HOST=0.0.0.0
+      - CACHE_SERVICE_PORT=8001
+      - CACHE_SERVICE_WORKERS=4
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # Database Configuration (for fallback)
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-trading_db}
+      - DB_USER=${DB_USER:-trading_admin}
+      - DB_PASSWORD=${DB_PASSWORD:-trading_password_123}
+      
+      # TTL Settings
+      - TTL_STOCK_PRICES=300
+      - TTL_OPTIONS_DATA=300
+      - TTL_SIGNALS=1800
+      - TTL_USER_SESSIONS=3600
+      - TTL_ANALYTICS=900
+      - TTL_MARKET_STATUS=60
+      
+      # API Configuration
+      - API_PREFIX=/api/v1
+      - ENABLE_CORS=true
+      - CORS_ORIGINS=*
+      
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS=1000
+      - RATE_LIMIT_WINDOW=3600
+      
+      # Monitoring
+      - METRICS_ENABLED=true
+      - HEALTH_CHECK_ENABLED=true
+      - PROMETHEUS_ENABLED=true
+    
+    volumes:
+      - ./logs/cache:/var/log/ai-ots
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Data Ingestion Service
+  data-ingestion:
+    build:
+      context: ./services/data-ingestion
+      dockerfile: Dockerfile
+    container_name: ai-ots-data-ingestion
+    ports:
+      - "8002:8002"
+    environment:
+      # Database Configuration
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-trading_db}
+      - DB_USER=${DB_USER:-trading_admin}
+      - DB_PASSWORD=${DB_PASSWORD:-trading_password_123}
+      
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      
+      # Service Configuration
+      - DATA_SERVICE_HOST=0.0.0.0
+      - DATA_SERVICE_PORT=8002
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # Databento Configuration
+      - DATABENTO_API_KEY=${DATABENTO_API_KEY:-mock_api_key}
+      - DATABENTO_MODE=${DATABENTO_MODE:-mock}
+      
+      # Data Collection Settings
+      - COLLECTION_INTERVAL=60
+      - BATCH_SIZE=1000
+      - TARGET_SYMBOLS=AAPL,GOOGL,MSFT,AMZN,TSLA,NVDA,META
+    
+    volumes:
+      - ./logs/data-ingestion:/var/log/ai-ots
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Analytics Service
+  analytics:
+    build:
+      context: ./services/analytics
+      dockerfile: Dockerfile
+    container_name: ai-ots-analytics
+    ports:
+      - "8003:8003"
+    environment:
+      # Database Configuration
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-trading_db}
+      - DB_USER=${DB_USER:-trading_admin}
+      - DB_PASSWORD=${DB_PASSWORD:-trading_password_123}
+      
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      
+      # Service Configuration
+      - ANALYTICS_SERVICE_HOST=0.0.0.0
+      - ANALYTICS_SERVICE_PORT=8003
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # Analytics Settings
+      - ANALYTICS_CACHE_TTL=300
+      - MAX_LOOKBACK_DAYS=30
+      - MIN_DATA_POINTS=20
+    
+    volumes:
+      - ./logs/analytics:/var/log/ai-ots
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Signal Generation Service (Placeholder)
+  signals:
+    image: nginx:alpine
+    container_name: ai-ots-signals
+    ports:
+      - "8004:80"
+    volumes:
+      - ./services/signals/placeholder.html:/usr/share/nginx/html/index.html
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # Portfolio Service (Placeholder)
+  portfolio:
+    image: nginx:alpine
+    container_name: ai-ots-portfolio
+    ports:
+      - "8005:80"
+    volumes:
+      - ./services/portfolio/placeholder.html:/usr/share/nginx/html/index.html
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+
+  # =============================================================================
+  # MONITORING & TOOLS
+  # =============================================================================
+
+  # Prometheus (Metrics Collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-ots-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - monitoring
+
+  # Grafana (Visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai-ots-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - monitoring
+
+  # Redis Commander (Redis Web UI)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ai-ots-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - tools
+
+  # pgAdmin (PostgreSQL Web UI)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ai-ots-pgadmin
+    ports:
+      - "8080:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@ai-ots.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - timescaledb
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - tools
+
+  # Nginx (Reverse Proxy & Load Balancer)
+  nginx:
+    image: nginx:alpine
+    container_name: ai-ots-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - production
+
+  # =============================================================================
+  # DEVELOPMENT TOOLS
+  # =============================================================================
+
+  # Jupyter Notebook (Data Analysis)
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    container_name: ai-ots-jupyter
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-ai-ots-token}
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - jupyter_data:/home/jovyan
+    networks:
+      - ai-ots-network
+    profiles:
+      - development
+
+  # Mailhog (Email Testing)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: ai-ots-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    restart: unless-stopped
+    networks:
+      - ai-ots-network
+    profiles:
+      - development
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+
+volumes:
+  timescaledb_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  jupyter_data:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+
+networks:
+  ai-ots-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+# =============================================================================
+# CONFIGURATION NOTES
+# =============================================================================
+
+# To start the full system:
+# docker-compose up -d
+
+# To start with monitoring:
+# docker-compose --profile monitoring up -d
+
+# To start with development tools:
+# docker-compose --profile development up -d
+
+# To start with all tools:
+# docker-compose --profile monitoring --profile tools --profile development up -d
+
+# To start production setup:
+# docker-compose --profile production --profile monitoring up -d
+
+# Service URLs:
+# - API Gateway: http://localhost:8000
+# - Cache Service: http://localhost:8001
+# - Data Ingestion: http://localhost:8002
+# - Analytics: http://localhost:8003
+# - Signals: http://localhost:8004
+# - Portfolio: http://localhost:8005
+# - Grafana: http://localhost:3000
+# - Prometheus: http://localhost:9090
+# - Redis Commander: http://localhost:8081
+# - pgAdmin: http://localhost:8080
+# - Jupyter: http://localhost:8888
+
+# Health checks:
+# curl http://localhost:8000/health
+# curl http://localhost:8001/health
+# curl http://localhost:8002/health
+# curl http://localhost:8003/health
+
